@@ -1,0 +1,113 @@
+diff -ur evernote-mode/evernote-mode.el evernote-mode-new/evernote-mode.el
+--- evernote-mode/evernote-mode.el	2012-06-18 21:52:31.000000000 +0900
++++ evernote-mode-new/evernote-mode.el	2013-01-24 23:42:18.000000000 +0900
+@@ -162,6 +162,9 @@
+   "*Non-nil means that password cache is enabled.
+ It is recommended to encrypt the file with EasyPG.")
+ 
++(defvar evernote-developer-token nil
++  "*An developer token of your evernote")
++
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ ;; Interface for evernote-browsing-mode.
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+@@ -550,24 +553,26 @@
+   "Login"
+   (interactive)
+   (if (called-interactively-p) (enh-clear-onmem-cache))
+-  (unwind-protect
+-      (let* ((cache (enh-password-cache-load))
+-             (usernames (mapcar #'car cache))
+-             (username (or evernote-username
+-                           (read-string "Evernote user name:"
+-                                        (car usernames) 'usernames)))
+-             (cache-passwd (enutil-aget username cache)))
+-        (unless (and cache-passwd
+-                     (eq (catch 'error 
+-                           (progn 
+-                             (enh-command-login username cache-passwd)
+-                             t))
+-                         t))
+-          (let* ((passwd (read-passwd "Passwd:")))
+-            (enh-command-login username passwd)
+-            (setq evernote-username username)
+-            (enh-password-cache-save (enutil-aset username cache passwd)))))
+-    (enh-password-cache-close)))
++  (if evernote-developer-token
++      (enh-command-login-token evernote-developer-token) 
++    (unwind-protect
++        (let* ((cache (enh-password-cache-load))
++               (usernames (mapcar #'car cache))
++               (username (or evernote-username
++                             (read-string "Evernote user name:"
++                                          (car usernames) 'usernames)))
++               (cache-passwd (enutil-aget username cache)))
++          (unless (and cache-passwd
++                       (eq (catch 'error 
++                             (progn 
++                               (enh-command-login username cache-passwd)
++                               t))
++                           t))
++            (let* ((passwd (read-passwd "Passwd:")))
++              (enh-command-login username passwd)
++              (setq evernote-username username)
++              (enh-password-cache-save (enutil-aset username cache passwd)))))
++      (enh-password-cache-close))))
+ 
+ 
+ (defun evernote-open-note (&optional ask-notebook)
+@@ -1769,6 +1774,14 @@
+            (enutil-to-ruby-string passwd))))
+ 
+ 
++(defun enh-command-login-token (token)
++  "Issue login command"
++  (enh-command-issue
++   (format ":class => %s, :auth_token => %s"
++           (enutil-to-ruby-string "AuthCommand")
++           (enutil-to-ruby-string token))))
++
++
+ (defun enh-command-get-notebook-attrs ()
+   "Issue listnotebooks command"
+   (let ((reply (enh-command-issue
+diff -ur evernote-mode/ruby/bin/enclient.rb evernote-mode-new/ruby/bin/enclient.rb
+--- evernote-mode/ruby/bin/enclient.rb	2012-06-18 22:38:39.000000000 +0900
++++ evernote-mode-new/ruby/bin/enclient.rb	2013-01-24 23:46:58.000000000 +0900
+@@ -426,13 +426,17 @@
+ 
+ 
+   class AuthCommand < Command
+-    attr_accessor :user, :passwd
++    attr_accessor :user, :passwd, :auth_token
+ 
+     def exec_impl
+-      Formatter.to_ascii @user, @passwd
++      Formatter.to_ascii @user, @passwd, @auth_token
+ 
+       server_task do
+-        sm.authenticate @user, @passwd
++        if @auth_token
++          sm.authenticate_with_token @auth_token
++        else
++          sm.authenticate @user, @passwd
++        end
+         LOG.info "Auth successed: auth_token = '#{sm.auth_token}', shared_id = '#{sm.shared_id}'"
+         tm.put SyncTask.new(sm, dm, tm)
+         server_task true do # defer reply until first sync will be done.
+@@ -1175,6 +1179,15 @@
+       @note_store = create_note_store @shared_id
+     end
+ 
++    def authenticate_with_token(token)
++      @user_store = create_user_store
++      user = @user_store.getUser token
++      @auth_token = token
++      @shared_id = user.shardId if user
++      @expiration = 60 * 60 * 24 * 365
++      @note_store = create_note_store @shared_id
++    end
++
+     def refresh_authentication(current_time)
+       if current_time > @expiration - REFRESH_LIMIT_SEC * 1000
+         LOG.info "refresh authentication"
